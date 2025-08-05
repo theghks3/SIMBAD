@@ -1,12 +1,7 @@
 import numpy as np
-import os
-import csv
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from utils import *
-from time import time
 
 def normalization(train, val, test):
     assert train.shape[1:] == val.shape[1:] and val.shape[1:] == test.shape[1:]
