@@ -142,9 +142,9 @@ def read_and_generate_dataset(graph_signal_matrix_filename, num_of_weeks, num_of
     (_, train_week_sim_norm, val_week_sim_norm, test_week_sim_norm) = normalization(train_week_sim, val_week_sim, test_week_sim)
     (_, train_day_sim_norm, val_day_sim_norm, test_day_sim_norm) = normalization(train_day_sim, val_day_sim, test_day_sim)
 
-    print(f'Train week: {train_week.shape},Train day: {train_day.shape}, Train hour: {train_hour.shape}')
-    print(f'Val week: {val_week.shape},Val day: {val_day.shape}, Val hour: {val_hour.shape}')
-    print(f'Test week: {test_week.shape},Test day: {test_day.shape}, Test hour: {test_hour.shape}')
+    print(f'Train week: {train_week.shape}, Train day: {train_day.shape}, Train hour: {train_hour.shape}')
+    print(f'Val week: {val_week.shape}, Val day: {val_day.shape}, Val hour: {val_hour.shape}')
+    print(f'Test week: {test_week.shape}, Test day: {test_day.shape}, Test hour: {test_hour.shape}')
 
     all_data = {
         'train': {
