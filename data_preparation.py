@@ -34,12 +34,6 @@ def normalization_given_stat(x, stats):
 
     return x_norm
 
-def get_stats(x):
-    min_val = x.min(dim=0, keepdims=True).values
-    max_val = x.max(dim=0, keepdims=True).values
-
-    return {'min': min_val, 'max': max_val}
-
 def get_stats_numpy(x):
     min_val = x.min(axis=0, keepdims=True)
     max_val = x.max(axis=0, keepdims=True)
