@@ -7,11 +7,6 @@ numpy == 2.2.5
 torch-geometric == 2.6.1
 ```
 
-## Folder Structure
-```
-|_
-```
-
 ## Training and Testing Commands
 Train SIMBAD through the following commands for the 4 PEMS datasets.
 
