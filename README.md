@@ -29,3 +29,10 @@ Continue training if terminated although training is not finished through the fo
 ```
 python Run.py --data_type PEMS08 --num_vertices 170 --checkpoint PEMS08.pth --mode train_continue
 ```
+
+## Datasets
+We used four traffic datasets PEMS03, PEMS04, PEMS07 and PEMS08 which are collected by California Transportation Agencies (CalTrans) Performance Measurement System (PeMS) in real time every 30 seconds.
+
+The collected data is aggregated to 5 minutes, meaning there are 12 points for each hour.
+
+Dataset can be downloaded from ASTGNN(https://github.com/guoshnBJTU/ASTGNN/tree/main/data)
