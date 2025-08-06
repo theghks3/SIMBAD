@@ -35,7 +35,7 @@ We used four traffic datasets PEMS03, PEMS04, PEMS07 and PEMS08 which are collec
 
 The collected data is aggregated to 5 minutes, meaning there are 12 points for each hour.
 
-Datasets can be downloaded from [ASTGNN](https://github.com/guoshnBJTU/ASTGNN/tree/main/data).
+Traffic and connectivity information can be downloaded from [ASTGNN](https://github.com/guoshnBJTU/ASTGNN/tree/main/data).
 
 ### Dataset Statistics
 | Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 |
