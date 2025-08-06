@@ -42,9 +42,9 @@ Traffic and connectivity information can be downloaded from [ASTGNN](https://git
 |---------|--------|--------|--------|--------|
 | # of nodes | 358 | 307 | 883 | 170 |
 | # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 |
-| # Granularity | 5 mins | 5 mins | 5 mins | 5 mins |
-| # Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 |
-| # End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 |
+| Granularity | 5 mins | 5 mins | 5 mins | 5 mins |
+| Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 |
+| End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 |
 | Signals | F | F,S,O | F | F,S,O |
 
 In column titled “Signals”, **F** represents traffic flow, **S** represents traffic speed, and **O** represents traffic occupancy rate.
