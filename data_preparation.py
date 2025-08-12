@@ -137,9 +137,18 @@ def read_and_generate_dataset(graph_signal_matrix_filename, num_of_weeks, num_of
     (_, train_week_sim_norm, val_week_sim_norm, test_week_sim_norm) = normalization(train_week_sim, val_week_sim, test_week_sim)
     (_, train_day_sim_norm, val_day_sim_norm, test_day_sim_norm) = normalization(train_day_sim, val_day_sim, test_day_sim)
 
-    print(f'Train week: {train_week.shape}, Train day: {train_day.shape}, Train hour: {train_hour.shape}')
-    print(f'Val week: {val_week.shape}, Val day: {val_day.shape}, Val hour: {val_hour.shape}')
-    print(f'Test week: {test_week.shape}, Test day: {test_day.shape}, Test hour: {test_hour.shape}')
+    print("Train week: {}, Train day: {}, Train hour: {}, Train week2_sim: {}, Train week_sim: {}, Train day_sim: {}".format(
+        train_week.shape, train_day.shape, train_hour.shape,
+        train_week2_sim.shape, train_week_sim.shape, train_day_sim.shape
+    ))
+    print("Val week {}, Val day: {}, Val hour: {}, Val week2_sim: {}, Val week_sim: {}, Val day_sim: {}".format(
+        val_week.shape, val_day.shape, val_hour.shape,
+        val_week2_sim.shape, val_week_sim.shape, val_day_sim.shape
+    ))
+    print("Test week: {}, Test day: {}, Test hour: {}, Test week2_sim: {}, Test week_sim: {}, Test hour_sim: {}".format(
+        test_week.shape, test_day.shape, test_hour.shape,
+        test_week2_sim.shape, test_week_sim.shape, test_day_sim.shape
+    ))
 
     all_data = {
         'train': {
