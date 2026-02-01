@@ -2,7 +2,8 @@
 
 ## Required Packages
 ```
-pytorch == 2.7.1
+python == 3.10.13
+pytorch == 2.9.1
 numpy == 2.2.5
 torch-geometric == 2.6.1
 ```
