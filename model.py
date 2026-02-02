@@ -215,8 +215,6 @@ class AggSpatialConv(nn.Module):
         norm_A_2 = self.adj_param_2().float()
 
         adj_1_hop = weighted_adj * norm_A_1
-        #adj_2_hop = torch.matmul(weighted_adj, weighted_adj)
-        #adj_2_hop = adj_2_hop * norm_A_2
         adj_2_hop = weighted_adj * norm_A_2
         adj_2_hop = torch.matmul(adj_2_hop, adj_2_hop)
 
