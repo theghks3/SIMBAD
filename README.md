@@ -15,7 +15,7 @@ For argument "mode", train is default.
 ```
 python Run.py --data_type PEMS03 --num_vertices 358 --checkpoint PEMS03.pth --mode train
 python Run.py --data_type PEMS04 --num_vertices 307 --checkpoint PEMS04.pth --mode train
-python Run.py --data_type PEMS07 --num_vertices 883 --checkpoint PEMS07.pth --mode train --batch_size 32
+python Run.py --data_type PEMS07 --num_vertices 883 --checkpoint PEMS07.pth --mode train
 python Run.py --data_type PEMS08 --num_vertices 170 --checkpoint PEMS08.pth --mode train
 ```
 
