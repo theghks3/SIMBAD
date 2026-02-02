@@ -1,14 +1,6 @@
-import numpy as np
-import os
-import csv
-import pickle
-from time import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import BatchSampler
-from torch_geometric.nn import MessagePassing
 from utils import *
 
 class Adjacency_Weight(nn.Module):
@@ -77,6 +69,17 @@ class NodewiseLearnableAdjWeight(nn.Module):
         neighbor_weights = (self.theta / neighbor_count).repeat(1, N)  # shape: [N, N]
         weights[neighbor_mask] = neighbor_weights[neighbor_mask].float()
         return weights  # shape: [N, N]
+
+class Embedding_Layer(nn.Module):
+    def __init__(self, embed_num, embed_dim):
+        super(Embedding_Layer, self).__init__()
+        self.embed = nn.Embedding(embed_num, embed_dim)
+
+    def forward(self, week_idx, day_idx):
+
+        final_idx = (week_idx << 1) | day_idx
+
+        return self.embed(index).unsqueeze(-1).repeat(1,1,1,12)
 
 # Self attention on spatial axis
 class Spatial_self_att(nn.Module):
@@ -361,7 +364,7 @@ class His_to_Recent(nn.Module):
         :return:
         final_output : output // shape : (batch_size, node, timestep)
         '''
-        x_1 = self.fc_1(x[0].transpose(2,3)).transpose(2,3) + embed.unsqueeze(-1).repeat(1,1,1,12)
+        x_1 = self.fc_1(x[0].transpose(2,3)).transpose(2,3) + embed
         block_output_1 = self.block(x_1, weighted_adj[0]) # B, N, F, T
 
         x_2 = self.fc_2(x[1].transpose(2,3)).transpose(2,3)
@@ -386,7 +389,7 @@ class SIMBAD(nn.Module):
         self.submodule = His_to_Recent(device, num_for_prediction, backbone[0], sem_adj)
 
         self.W = nn.Parameter(torch.ones(num_of_vertices, num_for_prediction))
-        self.embed = nn.Embedding(4,64)
+        self.embed = Embedding_Layer(4, in_dim)
 
         self.node = num_of_vertices
         self.in_dim = in_dim
@@ -464,8 +467,7 @@ class SIMBAD(nn.Module):
         hour_adj = self.softmax(self.weight_adj(x_hour, x_hour, self.adj_)).float()
 
         # Embedding
-        mask_final_idx = (mask_week_idx << 1) | mask_day_idx
-        embedding_vec = self.embed(mask_final_idx)
+        embedding_vec = self.embed(mask_week_idx, mask_day_idx)
 
         # Concat Historical Inputs
         x_final_weekday = torch.cat([x_final_week_input, x_final_day_input], dim=2)
