@@ -1,4 +1,4 @@
-# Aperiodicity-Robust Spatio-Temporal Traffic Forecasting (SIMBAD)
+# SIMBAD: Spatio-Temporal Traffic Forecasting Robust to Aperiodicity
 
 ## Required Packages
 ```
