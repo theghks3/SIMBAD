@@ -26,6 +26,7 @@ python Run.py --config config/PEMS03.conf --mode test
 ```
 
 Continue training if terminated although training is not finished through the following command.
+
 (Continues starting from latest best validation epoch)
 
 ```
