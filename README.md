@@ -13,22 +13,23 @@ Train SIMBAD through the following commands for the 4 PEMS datasets.
 
 For argument "mode", train is default.
 ```
-python Run.py --data_type PEMS03 --num_vertices 358 --checkpoint PEMS03.pth --mode train
-python Run.py --data_type PEMS04 --num_vertices 307 --checkpoint PEMS04.pth --mode train
-python Run.py --data_type PEMS07 --num_vertices 883 --checkpoint PEMS07.pth --mode train
-python Run.py --data_type PEMS08 --num_vertices 170 --checkpoint PEMS08.pth --mode train
+python Run.py --config config/PEMS03.conf
+python Run.py --config config/PEMS04.conf
+python Run.py --config config/PEMS07.conf
+python Run.py --config config/PEMS08.conf
 ```
 
 Test SIMBAD with a saved model (based on best validation loss) through the following command.
 
 ```
-python Run.py --data_type PEMS08 --num_vertices 170 --checkpoint PEMS08.pth --mode test
+python Run.py --config config/PEMS03.conf --mode test
 ```
 
 Continue training if terminated although training is not finished through the following command.
+(Continues starting from latest best validation epoch)
 
 ```
-python Run.py --data_type PEMS08 --num_vertices 170 --checkpoint PEMS08.pth --mode train_continue
+python Run.py --config config/PEMS03.conf --mode train_continue
 ```
 
 ## Datasets
