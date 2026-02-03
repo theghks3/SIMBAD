@@ -1,6 +1,14 @@
+import numpy as np
+import os
+import csv
+import pickle
+from time import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import BatchSampler
+from torch_geometric.nn import MessagePassing
 from utils import *
 
 class Adjacency_Weight(nn.Module):
@@ -20,7 +28,7 @@ class Adjacency_Weight(nn.Module):
         eye = torch.eye(similarity.size(1), device=similarity.device).unsqueeze(0)
         similarity_matrix = similarity * (1 - eye)
 
-        weighted_matrix = similarity_matrix * adj
+        weighted_matrix = similarity_matrix * adj.to(x.device)
 
         return weighted_matrix
 
@@ -79,7 +87,7 @@ class Embedding_Layer(nn.Module):
 
         final_idx = (week_idx << 1) | day_idx
 
-        return self.embed(index).unsqueeze(-1).repeat(1,1,1,12)
+        return self.embed(final_idx).unsqueeze(-1).repeat(1,1,1,12)
 
 # Self attention on spatial axis
 class Spatial_self_att(nn.Module):
@@ -440,7 +448,7 @@ class SIMBAD(nn.Module):
         ).float() 
 
         # 3) Expectation of L1-similarity of Weekly Input
-        mask_week_val = p_w2 * week2_dtw_value + p_w1 * week_dtw_value   # (B, N, 1)
+        mask_week_val = p_w2 * week2_l1 + p_w1 * week_l1   # (B, N, 1)
 
         # 4-1-1) Masking Matrix of Weekly Input
         mask_week = torch.sigmoid(self.scale * (self.threshold_week - mask_week_val)).float()
@@ -451,7 +459,7 @@ class SIMBAD(nn.Module):
         x_final_week_input = x_week_input * mask_week
 
         # 4-2-1) Masking Matrix of Daily Input
-        mask_day = torch.sigmoid(self.scale * (self.threshold_day - day_dtw_value)).float()
+        mask_day = torch.sigmoid(self.scale * (self.threshold_day - day_l1)).float()
         mask_day_idx = (mask_day >= 0.5).long().squeeze(-1)
         mask_day = mask_day.unsqueeze(-1) # B, N, 1, 1
 
@@ -476,7 +484,7 @@ class SIMBAD(nn.Module):
         normalized_his_adj = batch_symmetric_normalize(his_adj).float().unsqueeze(1) # (B, 1, N, N)
         normalized_hour_adj = batch_symmetric_normalize(hour_adj).float().unsqueeze(1) # (B, 1, N, N)
 
-        final_norm_adj = [final_his_adj, final_hour_adj]
+        final_norm_adj = [normalized_his_adj, normalized_hour_adj]
 
         x_final = [x_final_weekday, x_hour]
         mask_his = [mask_week, mask_day]
