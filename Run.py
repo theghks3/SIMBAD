@@ -105,8 +105,7 @@ def train(device, args, model, train_loader, val_loader, test_loader, scaler, op
                 'optimizer_state_dict': optimizer.state_dict(), 
                 'loss': best_val_loss,
                 'global_step': global_step,
-                'time_taken' : time() - start_time,
-                'seed' : args.seed
+                'time_taken' : time() - start_time
                 }, args.checkpoint)
             early_stop = 0
         else:
@@ -167,8 +166,7 @@ def train_continue(device, args, model, train_loader, val_loader, test_loader, s
                 'optimizer_state_dict': optimizer.state_dict(), 
                 'loss': best_val_loss,
                 'global_step': global_step,
-                'time_taken' : time() - start_time,
-                'seed' : args.seed
+                'time_taken' : time() - start_time
                 }, args.checkpoint)
             early_stop = 0
         else:
