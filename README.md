@@ -39,6 +39,7 @@ We used four traffic datasets PEMS03, PEMS04, PEMS07 and PEMS08 which are collec
 The collected data is aggregated to 5 minutes, meaning there are 12 points for each hour.
 
 Traffic and connectivity information for PEMS03, 04, 07 and 08 can be downloaded from [ASTGNN](https://github.com/guoshnBJTU/ASTGNN/tree/main/data).
+
 Traffic information for PEMS-BAY and METR-LA can be downloaded from [STAEformer](https://github.com/XDZhelheim/STAEformer)
 Processed connectivity information for PEMS-BAY and METR-LA is provided.
 
