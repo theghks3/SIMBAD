@@ -36,6 +36,8 @@ python Run.py --config config/PEMS03.conf --mode train_continue
 ## Datasets
 We used four traffic datasets PEMS03, PEMS04, PEMS07 and PEMS08 which are collected by California Transportation Agencies (CalTrans) Performance Measurement System (PeMS) in real time every 30 seconds.
 
+Also, METR-LA and PEMS-BAY which are collected from loop detectors deployed on highways in Los Angeles County and the Bay Area, respectively.
+
 The collected data is aggregated to 5 minutes, meaning there are 12 points for each hour.
 
 Traffic and connectivity information for PEMS03, 04, 07 and 08 can be downloaded from [ASTGNN](https://github.com/guoshnBJTU/ASTGNN/tree/main/data).
