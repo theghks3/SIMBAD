@@ -45,13 +45,13 @@ Traffic information for PEMS-BAY and METR-LA can be downloaded from [STAEformer]
 Processed connectivity information for PEMS-BAY and METR-LA is provided in data/.
 
 ### Dataset Statistics
-| Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 |
-|---------|--------|--------|--------|--------|
-| # of nodes | 358 | 307 | 883 | 170 |
-| # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 |
-| Granularity | 5 mins | 5 mins | 5 mins | 5 mins |
-| Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 |
-| End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 |
-| Signals | F | F,S,O | F | F,S,O |
+| Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 | METR-LA | PEMS-BAY|
+|---------|--------|--------|--------|--------|--------|--------|
+| # of nodes | 358 | 307 | 883 | 170 | 207 | 325 |
+| # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 | 34,272 | 52,116 |
+| Granularity | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins |
+| Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 | March 1st 2012 | Jan. 1st 2017 |
+| End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 | June 30th 2012 |  May 31st 2017 |
+| Signals | F | F,S,O | F | F,S,O | F,S,O | F,S,O |
 
 In column titled “Signals”, **F** represents traffic flow, **S** represents traffic speed, and **O** represents traffic occupancy rate.
