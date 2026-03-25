@@ -56,4 +56,4 @@ Processed connectivity information for PEMS-BAY and METR-LA is provided in data/
 | End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 | June 30th 2012 |  May 31st 2017 |
 | Signals | F | F,S,O | F | F,S,O | F,S,O | F,S,O |
 
-In column titled “Signals”, **F** represents traffic flow, **S** represents traffic speed, and **O** represents traffic occupancy rate.
+In row titled “Signals”, **F** represents traffic flow, **S** represents traffic speed, and **O** represents traffic occupancy rate.
