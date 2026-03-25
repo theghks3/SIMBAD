@@ -42,7 +42,7 @@ Traffic and connectivity information for PEMS03, 04, 07 and 08 can be downloaded
 
 Traffic information for PEMS-BAY and METR-LA can be downloaded from [STAEformer](https://github.com/XDZhelheim/STAEformer).
 
-Processed connectivity information for PEMS-BAY and METR-LA is provided.
+Processed connectivity information for PEMS-BAY and METR-LA is provided in data/.
 
 ### Dataset Statistics
 | Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 |
