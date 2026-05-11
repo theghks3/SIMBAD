@@ -52,7 +52,7 @@ Processed connectivity information for PEMS-BAY and METR-LA is provided in data/
 |---------|--------|--------|--------|--------|--------|--------|--------|
 | # of nodes | 358 | 307 | 883 | 170 | 207 | 325 | 716 |
 | # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 | 34,272 | 52,116 | 35,040 |
-| Granularity | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 15 mins |
+| Granularity | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 15 mins |
 | Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 | March 1st 2012 | Jan. 1st 2017 | Jan. 1st 2019 |
 | End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 | June 30th 2012 |  May 31st 2017 | Dec. 31st 2019 |
 | Signals | F | F,S,O | F | F,S,O | F,S,O | F,S,O | F |
