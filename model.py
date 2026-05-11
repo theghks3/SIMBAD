@@ -1,36 +1,80 @@
-import numpy as np
-import os
-import csv
-import pickle
-from time import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import BatchSampler
-from torch_geometric.nn import MessagePassing
+from uncertainty import *
 from utils import *
 
-class Adjacency_Weight(nn.Module):
+# ============================================================
+#  Utility / adjacency modules
+# ============================================================
+
+class BatchSymNorm(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, y, adj):
-        x = x.squeeze(2)
-        y = y.squeeze(2)
+    def forward(self, adj):
+        """
+        adj: (B, N, N) weighted adjacency matrices with self-loops
+        return: (B, N, N) normalized adjacency matrices
+        """
 
-        x_norm = torch.norm(x, dim=-1, keepdim=True) + 1e-10 # The L2 norm of x
-        y_norm = torch.norm(y, dim=-1, keepdim=True) + 1e-10 # The L2 norm of y
-        
-        # cosine similarity calculation (x dot y / (x_norm * y_norm))
-        similarity = torch.bmm(x, y.transpose(1, 2)) / (x_norm * y_norm.transpose(1, 2))
+        # Degree: (B, N)
+        deg = adj.sum(dim=2)  # sum over rows → degree for each node
 
-        eye = torch.eye(similarity.size(1), device=similarity.device).unsqueeze(0)
-        similarity_matrix = similarity * (1 - eye)
+        # D^{-1/2}: (B, N)
+        deg_inv_sqrt = torch.pow(deg + 1e-10, -0.5)
 
-        weighted_matrix = similarity_matrix * adj.to(x.device)
+        # Reshape for broadcasting: (B, N, 1) and (B, 1, N)
+        D_left = deg_inv_sqrt.unsqueeze(2)     # (B, N, 1)
+        D_right = deg_inv_sqrt.unsqueeze(1)    # (B, 1, N)
+
+        # Normalize: A_hat = D^{-1/2} A D^{-1/2}
+        adj_norm = D_left * adj * D_right      # broadcasting multiplication
+
+        return adj_norm  # shape: (B, N, N)
+
+class SimilarityAdjacency(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, y, adj, threshold, scale_input, scale_sim):
+
+        x = x[...,-6:].squeeze(2)
+        y = y[...,-6:].squeeze(2)
+
+        x_inv = scale_input.inverse_transform(x)
+        y_inv = scale_input.inverse_transform(y)
+
+        l1_adjacency = scale_sim.transform(torch.cdist(x_inv, y_inv, p=1))
+
+        l1_thresh_adj = torch.sigmoid(threshold - l1_adjacency)
+
+        weighted_matrix = l1_thresh_adj * adj.to(x.device)          
 
         return weighted_matrix
+
+class AdaptiveAdjacency(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.W_1 = nn.Parameter(torch.empty(6, 10))
+        self.W_2 = nn.Parameter(torch.empty(6, 10))
+        nn.init.xavier_uniform_(self.W_1)
+        nn.init.xavier_uniform_(self.W_2)
+
+    def forward(self, pred_sims, uncertainty):
+        node_confidence = torch.sigmoid(-uncertainty)
+        sim_i = torch.sigmoid(-pred_sims)
+
+        temp = torch.cat([node_confidence, sim_i], dim=-1)  # (B, N, 6)
+
+        W1 = torch.matmul(temp, self.W_1)           # (B, N, 64)
+        W2 = torch.matmul(temp, self.W_2).transpose(1, 2)  # (B, 64, N)
+
+        temp_adj = torch.matmul(W1, W2) / 8
+
+        adaptive_adj = F.softmax(F.relu(temp_adj), dim=-1)
+
+        return adaptive_adj
 
 class AdjacencyRowSoftmax(nn.Module):
     def __init__(self, eps: float = 1e-12):
@@ -39,458 +83,416 @@ class AdjacencyRowSoftmax(nn.Module):
 
     def forward(self, adj: torch.Tensor) -> torch.Tensor:
         mask = adj != 0
-        exps = torch.exp(adj) * mask
-        sums = exps.sum(dim=-1, keepdim=True)
-        out = exps / torch.clamp(sums, min=self.eps)
+        adj_masked = adj.masked_fill(~mask, float('-inf'))
+        out = F.softmax(adj_masked, dim=-1)
+        out = torch.nan_to_num(out, nan=0.0)
         return out
 
-class NodewiseLearnableAdjWeight(nn.Module):
-    def __init__(self, device, adj):
-        '''
-        adj : adjacency matrix with self-loop // shape : (node, node)
-        '''
-        super().__init__()
-        self.adj = adj.to(device)
-        self.theta = nn.Parameter(torch.full((adj.size(0), 1), 0.5))
-        self.device = device
 
-    def forward(self):
-        '''
-        :return:
-        weights : balances the strength of self-loop and its neighbors // theta for self-loop, (1-theta)/n for neighbor
-        '''
-        N = self.adj.size(0)
-        eye = torch.eye(N, device=self.adj.device)
-        is_self_loop = eye.bool()
+# ============================================================
+#  Linear / conv helpers
+# ============================================================
 
-        # number of neighbors
-        neighbor_count = (self.adj - eye).sum(dim=1, keepdim=True) + 1e-10  # shape: [N, 1]
+class FC_Linear(nn.Module):
+    def __init__(self, c_in, c_out):
+        super(FC_Linear, self).__init__()
+        self.mlp = nn.Conv2d(c_in, c_out, kernel_size=(1, 1), padding=(0, 0), stride=(1, 1), bias=True)
 
-        # weight matrix initialization
-        weights = torch.zeros_like(self.adj, dtype=torch.float).to(self.device)
-
-        # theta for each node
-        weights[is_self_loop] = self.theta.squeeze()
-
-        # neighbors : (1 - theta) / n
-        neighbor_mask = self.adj.bool() & (~is_self_loop)
-        neighbor_weights = (self.theta / neighbor_count).repeat(1, N)  # shape: [N, N]
-        weights[neighbor_mask] = neighbor_weights[neighbor_mask].float()
-        return weights  # shape: [N, N]
-
-class Embedding_Layer(nn.Module):
-    def __init__(self, embed_num, embed_dim):
-        super(Embedding_Layer, self).__init__()
-        self.embed = nn.Embedding(embed_num, embed_dim)
-
-    def forward(self, week_idx, day_idx):
-
-        final_idx = (week_idx << 1) | day_idx
-
-        return self.embed(final_idx).unsqueeze(-1).repeat(1,1,1,12)
-
-# Self attention on spatial axis
-class Spatial_self_att(nn.Module):
-    def __init__(self, f_in, f_out, num_heads=4):
-        '''
-        f_in : input dimension size for query, key, value
-        f_out : output dimension size for qeury, key, value
-        num_heads : number of heads for self-attention
-        '''
-        super(Spatial_self_att, self).__init__()
-        self.f_in = f_in
-        self.f_out = f_out
-
-        self.fc_q = nn.Linear(f_in, f_out)
-        self.fc_k = nn.Linear(f_in, f_out)
-        self.fc_v = nn.Linear(f_in, f_out)
-
-        self.head_dim = f_out // num_heads
-
-        self.fc_out = nn.Linear(f_out, f_out)
-
-        self.dropout = nn.Dropout(0.2)
-    
     def forward(self, x):
-        '''
-        :param:
-        x : input // shape : (batch_size, node, f_in, timestep)
+        return self.mlp(x)
 
-        :return:
-        out : output // shape : (batch_size, node, f_out, timestep)
-        '''
-        x = x.permute(0,3,1,2).contiguous() # B, T, N, F
 
-        batch_size = x.shape[0]
+# ============================================================
+#  Temporal module  (GTU)
+# ============================================================
 
-        query = self.fc_q(x)
-        key = self.fc_k(x)
-        value = self.fc_v(x)
-
-        # Qhead, Khead, Vhead (num_heads * batch_size, ..., length, head_dim)
-        query = torch.cat(torch.split(query, self.head_dim, dim=-1), dim=0)
-        key = torch.cat(torch.split(key, self.head_dim, dim=-1), dim=0)
-        value = torch.cat(torch.split(value, self.head_dim, dim=-1), dim=0)
-
-        key = key.transpose(-1,-2)
-
-        attn_score = (query @ key) / self.head_dim**0.5
-
-        attn_score = torch.softmax(attn_score, dim=-1)
-        out = attn_score @ value
-        out = torch.cat(torch.split(out, batch_size, dim=0), dim=-1)
-        
-        out = self.fc_out(out)
-        out = self.dropout(out)
-
-        out = out.permute(0,2,3,1) # B, N, F, T
-
-        return out
-
-class Temporal_self_att(nn.Module):
-    def __init__(self, f_in, f_out, num_heads=4):
-        super(Temporal_self_att, self).__init__()
-        self.f_in = f_in
-        self.f_out = f_out
-
-        self.fc_q = nn.Linear(f_in, f_out)
-        self.fc_k = nn.Linear(f_in, f_out)
-        self.fc_v = nn.Linear(f_in, f_out)
-
-        self.head_dim = f_out // num_heads
-
-        self.fc_out = nn.Linear(f_out, f_out)
-
-        self.dropout = nn.Dropout(0.2)
-    
-    def forward(self, x):
-        x = x.float()
-        B, N, F, T = x.shape
-        x = x.permute(0,1,3,2).contiguous() # B, N, T, F
-
-        batch_size = x.shape[0]
-
-        query = self.fc_q(x)
-        key = self.fc_k(x)
-        value = self.fc_v(x)
-
-        # Qhead, Khead, Vhead (num_heads * batch_size, ..., length, head_dim)
-        query = torch.cat(torch.split(query, self.head_dim, dim=-1), dim=0)
-        key = torch.cat(torch.split(key, self.head_dim, dim=-1), dim=0)
-        value = torch.cat(torch.split(value, self.head_dim, dim=-1), dim=0)
-
-        key = key.transpose(-1,-2)
-
-        attn_score = (query @ key) / self.head_dim**0.5
-
-        attn_score = torch.softmax(attn_score, dim=-1)
-        out = attn_score @ value
-        out = torch.cat(torch.split(out, batch_size, dim=0), dim=-1)
-
-        out = self.fc_out(out)
-        
-        out = self.dropout(out)
-
-        out = out.permute(0,1,3,2).contiguous() # B, N, F, T
-
-        return out
-
-# Spatial convolution with weighted adjacency matrix
-class AggSpatialConv(nn.Module):
-    def __init__(self, device, in_channels, out_channels, adj_mx):
-        '''
-        in_channels : input feature
-        out_channels : output feature
-        adj_mx : for theta operation // shape : (node, node) // with self-loop
-        '''
-        super(AggSpatialConv, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        self.weight_1 = nn.Parameter(torch.randn(in_channels, out_channels))
-        self.weight_2 = nn.Parameter(torch.randn(in_channels, out_channels))
-        self.adj_param_1 = NodewiseLearnableAdjWeight(device, adj_mx)
-        self.adj_param_2 = NodewiseLearnableAdjWeight(device, adj_mx)
-
-    def forward(self, x, weighted_adj):
-        '''
-        :param:
-        x: input // shape : (batch_size, node, feature, timestep)
-        weighted_adj: Weighted adjacency matrix of shape (batch_size, 1, node, node)
-
-        :return:
-        final_output : output // shape : (batch_size, node, feature, timestep)
-        '''
-        # theta, 1-theta
-        norm_A_1 = self.adj_param_1().float()
-        norm_A_2 = self.adj_param_2().float()
-
-        adj_1_hop = weighted_adj * norm_A_1
-        adj_2_hop = weighted_adj * norm_A_2
-        adj_2_hop = torch.matmul(adj_2_hop, adj_2_hop)
-
-        x = x.permute(0,3,1,2) # B, T, N, F
-
-        agg_features_1 = torch.matmul(adj_1_hop, x)
-        agg_features_2 = torch.matmul(adj_2_hop, x)
-
-        transformed_1 = torch.matmul(agg_features_1, self.weight_1)
-        transformed_2 = torch.matmul(agg_features_2, self.weight_2)
-
-        final_output = torch.sigmoid(transformed_1 + transformed_2) # B, T, N, F
-
-        final_output = final_output.permute(0,2,3,1) # B, N, F, T
-
-        return final_output
-
-# Gated convolution along time axis
 class GTU(nn.Module):
+    """Gated Temporal Unit — two stacked gated convolutions."""
     def __init__(self, in_channels, out_channels):
         super(GTU, self).__init__()
-        self.temp_conv = nn.Conv2d(in_channels, out_channels, kernel_size=(1,3), stride=(1,1), padding=(0,1))
-        self.gate_conv = nn.Conv2d(in_channels, out_channels, kernel_size=(1,3), stride=(1,1), padding=(0,1))
-
-        self.temp_conv_2 = nn.Conv2d(in_channels, out_channels, kernel_size=(1,3), stride=(1,1), padding=(0,1))
-        self.gate_conv_2 = nn.Conv2d(in_channels, out_channels, kernel_size=(1,3), stride=(1,1), padding=(0,1))
-
-        self.in_channels = in_channels
+        self.temp_conv   = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+        self.gate_conv   = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+        self.temp_conv_2 = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+        self.gate_conv_2 = nn.Conv2d(in_channels, out_channels, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+        self.in_channels  = in_channels
         self.out_channels = out_channels
 
     def forward(self, x):
-        '''
-        :param:
-        x : input // shape : (batch_size, node, feature, timestep)
-
-        :return:
-        gated_conv_output : output // shape : (batch_size, node, feature, timestep)
-        '''
-        x_conv = x.permute(0,2,1,3)
+        """x : (B, N, F, T)  →  (B, N, F, T)"""
+        x_conv = x.permute(0, 2, 1, 3)          # B, F, N, T
 
         temp = self.temp_conv(x_conv)
         gate = self.gate_conv(x_conv)
+        h    = torch.tanh(temp) * torch.sigmoid(gate)  # B, F, N, T
 
-        gated_conv_output = torch.tanh(temp) * torch.sigmoid(gate) # B, F, N, T
+        temp2 = self.temp_conv_2(h)
+        gate2 = self.gate_conv_2(h)
+        out   = torch.tanh(temp2) * torch.sigmoid(gate2)  # B, F, N, T
 
-        temp_2 = self.temp_conv_2(gated_conv_output)
-        gate_2 = self.gate_conv_2(gated_conv_output)
+        return out.permute(0, 2, 1, 3)  # B, N, F, T
 
-        final_output = torch.tanh(temp_2) * torch.sigmoid(gate_2)
-        final_output = final_output.permute(0,2,1,3)
 
-        return final_output
+class Temporal_self_att(nn.Module):
+    """Multi-head self-attention along the time axis."""
+    def __init__(self, f_in, f_out, dropout, num_heads=4):
+        super(Temporal_self_att, self).__init__()
+        self.head_dim = f_out // num_heads
+
+        self.fc_q   = nn.Linear(f_in, f_out)
+        self.fc_k   = nn.Linear(f_in, f_out)
+        self.fc_v   = nn.Linear(f_in, f_out)
+        self.fc_out = nn.Linear(f_out, f_out)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        """x : (B, N, F, T)  →  (B, N, F, T)"""
+        B, N, F, T = x.shape
+        x = x.permute(0, 1, 3, 2).contiguous()  # B, N, T, F
+
+        q = self.fc_q(x)
+        k = self.fc_k(x)
+        v = self.fc_v(x)
+
+        q = torch.cat(torch.split(q, self.head_dim, dim=-1), dim=0)
+        k = torch.cat(torch.split(k, self.head_dim, dim=-1), dim=0)
+        v = torch.cat(torch.split(v, self.head_dim, dim=-1), dim=0)
+
+        attn = (q @ k.transpose(-1, -2)) / self.head_dim ** 0.5
+        attn = torch.softmax(attn, dim=-1)
+        out  = attn @ v
+        out  = torch.cat(torch.split(out, B, dim=0), dim=-1)  # B, N, T, F
+
+        out = self.fc_out(out)
+        out = self.dropout(out)
+        return out.permute(0, 1, 3, 2).contiguous()  # B, N, F, T
+
+
+# ============================================================
+#  Spatial module  (Graph conv + spatial attention)
+# ============================================================
+
+class AggSpatialConv(nn.Module):
+    """2-hop graph convolution with a weighted adjacency matrix."""
+    def __init__(self, device, in_channels, out_channels):
+        super(AggSpatialConv, self).__init__()
+        self.conv = FC_Linear(in_channels * 3, out_channels)
+
+    def forward(self, x, weighted_adj):
+        """
+        x           : (B, N, F, T)
+        weighted_adj: (B, 1, N, N)  or  (B, N, N)
+        → (B, N, F, T)
+        """
+        adj_2 = torch.matmul(weighted_adj, weighted_adj)
+
+        x_t = x.permute(0, 3, 1, 2)  # B, T, N, F
+
+        agg1 = torch.matmul(weighted_adj, x_t)  # B, T, N, F
+        agg2 = torch.matmul(adj_2,        x_t)  # B, T, N, F
+
+        concat = torch.cat([x_t, agg1, agg2], dim=-1)  # B, T, N, 3F
+        concat = concat.permute(0, 3, 2, 1)              # B, 3F, N, T
+        out    = self.conv(concat)                        # B, F, N, T
+
+        return out.permute(0, 2, 1, 3)  # B, N, F, T
+
+
+class Spatial_self_att(nn.Module):
+    """Multi-head self-attention along the node axis."""
+    def __init__(self, f_in, f_out, dropout, num_heads=4):
+        super(Spatial_self_att, self).__init__()
+        self.head_dim = f_out // num_heads
+        self.num_heads = num_heads
+
+        self.fc_q   = nn.Linear(f_in, f_out)
+        self.fc_k   = nn.Linear(f_in, f_out)
+        self.fc_v   = nn.Linear(f_in, f_out)
+        self.fc_out = nn.Linear(f_out, f_out)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        """x : (B, N, F, T)  →  (B, N, F, T)"""
+        x_in = x.permute(0, 3, 1, 2).contiguous()  # B, T, N, F
+
+        q = self.fc_q(x_in)
+        k = self.fc_k(x_in)
+        v = self.fc_v(x_in)
+
+        B, T, N, C = q.shape
+        H, D = self.num_heads, self.head_dim
+
+        q = q.reshape(B * T, N, H, D).transpose(1, 2)
+        k = k.reshape(B * T, N, H, D).transpose(1, 2)
+        v = v.reshape(B * T, N, H, D).transpose(1, 2)
+
+        out = F.scaled_dot_product_attention(q, k, v)  # (B*T, H, N, D)
+        out = out.transpose(1, 2).reshape(B, T, N, C)
+        out = self.fc_out(out)
+        out = self.dropout(out)
+
+        return out.permute(0, 2, 3, 1)  # B, N, F, T  (C==F here)
+
+
+# ============================================================
+#  Temporal → Spatial Layer
+# ============================================================
 
 class STM_Layer(nn.Module):
-    def __init__(self, device, in_channels, out_channels, adj_mx, edge_index):
+    """
+    Sequential Temporal → Spatial layer.
+
+    Flow (per sub-layer uses Pre-LN for stability):
+    ┌────────────────────────────────────────────────────┐
+    │  x_in  (B, N, F, T)                                │
+    │    ↓  LayerNorm                                    │
+    │  Temporal self-attention                           │
+    │    ↓  + x_in  (residual)                           │
+    │  x_t                                               │
+    │    ↓  LayerNorm                                    │
+    │  GTU  (gated temporal conv)                        │
+    │    ↓  + x_t  (residual)                            │
+    │  x_temporal   ← full temporal representation       │
+    │    ↓  LayerNorm                                    │
+    │  Spatial self-attention                            │
+    │    ↓  + x_temporal  (residual)                     │
+    │  x_s                                               │
+    │    ↓  LayerNorm                                    │
+    │  Graph convolution  (weighted adj)                 │
+    │    ↓  + x_s  (residual)                            │
+    │  x_out   (B, N, F, T)                              │
+    └────────────────────────────────────────────────────┘
+
+    """
+
+    def __init__(self, device, hidden_dim, dropout):
         super(STM_Layer, self).__init__()
-        
-        self.temp_att = Temporal_self_att(in_channels, out_channels)
-        self.spat_att = Spatial_self_att(in_channels, out_channels)
 
-        self.mean_agg_1 = AggSpatialConv(device, in_channels, out_channels, adj_mx)
+        # ── Temporal sub-layers ──────────────────────────────────
+        self.ln_temp_att  = nn.LayerNorm(hidden_dim)
+        self.temp_att     = Temporal_self_att(hidden_dim, hidden_dim, dropout)
 
-        self.gate_conv = GTU(in_channels, out_channels)
+        self.ln_gtu       = nn.LayerNorm(hidden_dim)
+        self.gate_conv    = GTU(hidden_dim, hidden_dim)
 
-        self.ln = nn.LayerNorm(out_channels)
+        # ── Spatial sub-layers ──────────────────────────────────
+        self.ln_spat_att  = nn.LayerNorm(hidden_dim)
+        self.spat_att     = Spatial_self_att(hidden_dim, hidden_dim, dropout)
 
+        self.ln_graph     = nn.LayerNorm(hidden_dim)
+        self.graph_conv   = AggSpatialConv(device, hidden_dim, hidden_dim)
+
+        # ── Feed-forward mixing (optional, keeps expressiveness) ─
+        self.ln_ff  = nn.LayerNorm(hidden_dim)
+        self.ff     = nn.Sequential(
+            FC_Linear(hidden_dim, hidden_dim * 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            FC_Linear(hidden_dim * 2, hidden_dim),
+        )
+
+    # ----------------------------------------------------------
+    # helpers: apply Pre-LN → sublayer → residual
+    # ----------------------------------------------------------
+    @staticmethod
+    def _pre_ln_residual(ln, sublayer, x, **kwargs):
+        """Pre-LayerNorm residual wrapper.  LN is applied on the F dim."""
+        # x: (B, N, F, T)
+        # LayerNorm over F (last non-time dim) → reshape trick
+        x_norm = ln(x.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)  # B,N,F,T
+        return x + sublayer(x_norm, **kwargs)
+
+    @staticmethod
+    def _pre_ln_residual_plain(ln, sublayer, x):
+        x_norm = ln(x.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)
+        return x + sublayer(x_norm)
+
+    def _ff_residual(self, x):
+        """Feed-forward over F dimension with Pre-LN."""
+        x_norm = self.ln_ff(x.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)
+        # apply FF independently at every (B,N,T) position
+        h = x_norm.transpose(1,2)   # B, F, N, T
+        h = self.ff(h)
+        h = h.transpose(1,2)        # B, N, F, T
+        return x + h
+
+    # ----------------------------------------------------------
     def forward(self, x, weighted_adj):
-        '''
-        :param:
-        x : input // shape : (batch, node, feature, timestep)
-        weighted_adj : weighted adjacency matrix // shape : (batch_size, 1, node, node)
+        """
+        x            : (B, N, F, T)
+        weighted_adj : (B, 1, N, N)
+        → (B, N, F, T)
+        """
+        # ── 1. Temporal self-attention ──────────────────────────
+        x = self._pre_ln_residual_plain(self.ln_temp_att, self.temp_att, x)
 
-        :return:
-        final_output : output // shape : (batch_size, node, feature, timestep)
-        '''
-        x_input = x
+        # ── 2. Gated temporal convolution ───────────────────────
+        x = self._pre_ln_residual_plain(self.ln_gtu, self.gate_conv, x)
 
-        spatial_att = self.spat_att(x)
-        temporal_att = self.temp_att(x)
+        # x is now the "temporal representation" fed into spatial
+        # ── 3. Spatial self-attention ───────────────────────────
+        x = self._pre_ln_residual_plain(self.ln_spat_att, self.spat_att, x)
 
-        # spatial convolution
-        mean_aggregation = self.mean_agg_1(spatial_att, weighted_adj)
+        # ── 4. Graph convolution with adaptive adj ───────────────
+        x = self._pre_ln_residual(self.ln_graph, self.graph_conv, x, weighted_adj=weighted_adj)
 
-        # temporal convolution
-        gated = self.gate_conv(temporal_att) # B, N, F, T
-        
-        output = mean_aggregation + gated # B, N, F, T
+        # ── 5. Feed-forward (token-mixing along F) ───────────────
+        x = self._ff_residual(x)
 
-        x_residual = self.ln(F.relu((output + x_input).permute(0,3,1,2))) # B, T, N, F
+        return x  # B, N, F, T
 
-        final_output = x_residual.permute(0,2,3,1) # B, N, F, T
-
-        return final_output
 
 class STM_Stack(nn.Module):
-    def __init__(self, device, in_channels, out_channels, adj_mx, edge_index, modules):
+    def __init__(self, device, hidden_dim, dropout, num_modules):
         super(STM_Stack, self).__init__()
-        
+
         self.stack = nn.ModuleList(
-            [   
-                STM_Layer(device, in_channels, out_channels, adj_mx, edge_index)
-                for _ in range(modules)
-            ]
+            [STM_Layer(device, hidden_dim, dropout)
+             for _ in range(num_modules)]
         )
-        
+
     def forward(self, x, weighted_adj):
-        '''
-        :param:
-        x : input // shape : (batch, node, feature, timestep)
-        weighted_adj : weighted adjacency matrix // shape : (batch_size, 1, node, node)
-        
-        :return:
-        x : output // shape : (batch_size, node, feature, timestep)
-        '''
-        x_input = x
-        
+        """x : (B, N, F, T)  →  (B, N, F, T)"""
         for block in self.stack:
             x = block(x, weighted_adj)
-        
         return x
 
+
+# ============================================================
+#  His_to_Recent
+# ============================================================
+
 class His_to_Recent(nn.Module):
-    def __init__(self, device, num_for_prediction, backbone, sem_adj, modules=2):
+    def __init__(self, device, hidden_dim, num_for_prediction, dropout=0.2, num_modules=2):
         super(His_to_Recent, self).__init__()
 
-        self.block = STM_Stack(device, 64, 64, sem_adj, backbone['edge_index'], modules)
-        self.block_2 = STM_Stack(device, 64, 64, backbone['adj_param'], backbone['edge_index'], modules)
-  
-        self.fc_1 = nn.Linear(2,64)
-        self.fc_2 = nn.Linear(1,64)
+        self.block   = STM_Stack(device, hidden_dim, dropout, num_modules)
+        self.block_2 = STM_Stack(device, hidden_dim, dropout, num_modules)
 
-        self.final_fc = nn.Linear(64, 1)
+        self.fc_1 = FC_Linear(1,64)
+        self.fc_2 = FC_Linear(1,64)
+
+        self.final_fc = FC_Linear(64,1)
 
         self.ln = nn.LayerNorm(64)
-    
-    def forward(self, x, weighted_adj, mask, embed):
-        '''
-        :param:
-        x : input // shape : (batch, node, feature, timestep)
-        weighted_adj : weighted adjacency matrix // shape : (batch_size, 1, node, node)
-        mask : masking matrices of historical inputs // shape : (batch_size, node, 1, 1)
-        embed : embedding vector // shape : (batch_size, node, 1)
 
-        :return:
-        final_output : output // shape : (batch_size, node, timestep)
-        '''
-        x_1 = self.fc_1(x[0].transpose(2,3)).transpose(2,3) + embed
-        block_output_1 = self.block(x_1, weighted_adj[0]) # B, N, F, T
+    def forward(self, x, weighted_adj, mask):
+        """
+        x[0] : historical input (B, N, 1, T)
+        x[1] : recent input    (B, N, 1, T)
+        weighted_adj[0] : his adj (B,1,N,N)
+        weighted_adj[1] : hour adj (B,1,N,N)
+        mask : (B, N, 1, 1)
+        """
+        # ── historical branch ──────────────────────────────────
+        x_1 = self.fc_1(x[0].transpose(1, 2)).transpose(1, 2).float()  # B,N,64,T
+        block_output_1 = self.block(x_1, weighted_adj[0])               # B,N,64,T
 
-        x_2 = self.fc_2(x[1].transpose(2,3)).transpose(2,3)
-        x_block_2 = block_output_1 + x_2 + (1 - mask[0] * mask[1]) * x_2
-        x_block_2_in = self.ln(x_block_2.permute(0,3,1,2)).permute(0,2,3,1)
-        block_output_2 = self.block_2(x_block_2_in, weighted_adj[1])
+        # ── fusion with recent ────────────────────────────────
+        x_2      = self.fc_2(x[1].transpose(1, 2)).transpose(1, 2).float()
+        # mask tells how confident historical is; when mask≈0 rely on recent
+        x_fused  = block_output_1 + x_2 + (1 - mask) * x_2
+        x_fused  = self.ln(x_fused.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
 
-        final_output = self.final_fc(block_output_2.transpose(2,3)).squeeze(-1) # B, N, T
+        # ── recent branch (temporal patterns → spatial propagation) ─
+        block_output_2 = self.block_2(x_fused, weighted_adj[1])  # B,N,64,T
+
+        final_output = self.final_fc(block_output_2.transpose(1, 2)).squeeze(1)  # B,N,T
 
         return final_output
 
+# ============================================================
+#  SIMBAD
+# ============================================================
+
 class SIMBAD(nn.Module):
-    def __init__(self, device, num_for_prediction, backbone, adj, threshold_week, threshold_day, sem_adj, num_of_vertices=307, in_dim=64, output_dim=1, scale=20, tau=0.05):
+    def __init__(self, device, num_for_prediction, adj, threshold, stat,
+                 num_of_vertices, hidden_dim, output_dim, tau, dropout):
         super(SIMBAD, self).__init__()
 
-        week_sim = torch.from_numpy(threshold_week).to(device)
-        day_sim = torch.from_numpy(threshold_day).to(device)
-        
-        self.threshold_week = nn.Parameter(week_sim)
-        self.threshold_day = nn.Parameter(day_sim)
+        sim = torch.from_numpy(threshold).to(device)
+        self.threshold = nn.Parameter(sim)
 
-        self.submodule = His_to_Recent(device, num_for_prediction, backbone[0], sem_adj)
+        self.submodule = His_to_Recent(device, hidden_dim, num_for_prediction, dropout)
 
         self.W = nn.Parameter(torch.ones(num_of_vertices, num_for_prediction))
-        self.embed = Embedding_Layer(4, in_dim)
 
-        self.node = num_of_vertices
-        self.in_dim = in_dim
+        self.node     = num_of_vertices
         self.output_dim = output_dim
         self.timestep = num_for_prediction
         self.num_nodes = num_of_vertices
 
-        self.softmax = AdjacencyRowSoftmax()
+        self.adap_adj      = AdaptiveAdjacency()
+        self.improve_mask = UncertaintyRegulation(hidden_dim, tau, num_of_vertices, sim, dropout)
 
-        self.adj_ = adj
-        self.sem_adj = sem_adj
+        self.adj_      = adj
+        self.softmax   = AdjacencyRowSoftmax()
+        self.adj_norm = BatchSymNorm()
 
-        self.weight_adj = Adjacency_Weight()
-        self.scale = scale
-        self.tau = tau
+        self.weight_adj = SimilarityAdjacency()
+        self.tau        = tau
+
+        self.scale_input = stat['input']
+        self.scale_sim   = stat['sim']
 
         self.device = device
 
     def forward(self, x_list):
-        '''
-        x_list[0]: weekly input // shape : (batch_size, node, feature, timestep)
-        x_list[1]: daily input // shape : (batch_size, node, feature, timestep)
-        x_list[2]: recent input // shape : (batch_size, node, feature, timestep)
-        x_list[3]: last 2 week dtw // shape : (batch_size, node, 1)
-        x_list[4]: last week dtw // shape : (batch_size, node, 1)
-        x_list[5]: last day dtw // shape : (batch_size, node, 1)
-        '''
-        
         x_week = x_list[0].float()
-        x_day = x_list[1].float()
+        x_day  = x_list[1].float()
         x_hour = x_list[2].float()
 
-        week2_l1 = x_list[3]
-        week_l1 = x_list[4]
-        day_l1 = x_list[5]
+        input_l1 = x_list[3].float()
 
-        # 1) L1-based Proabability Distribution
-        logits = torch.cat([-week_l1, -week2_l1], dim=-1)  # (B, N, 2) 
-        prob = torch.softmax(logits / self.tau, dim=-1)    # (B, N, 2)
+        processing_output = self.improve_mask(input_l1)
 
-        p_w1 = prob[..., 0].unsqueeze(-1).float()  # (B, N, 1)
-        p_w2 = prob[..., 1].unsqueeze(-1).float()  # (B, N, 1)
+        probs         = processing_output['probs']
+        pred_sims     = processing_output['pred_sims']
+        uncertainty   = processing_output['uncertainty']
+        unc_adj       = processing_output['uncertainty_adj']
+        loss_compute  = processing_output['loss_compute']
 
-        # 2) Expectation of Weekly Input
-        x_week_input = (
+        p_w2, p_w1, p_d1 = probs
+
+        x_his_input = (
             p_w2.unsqueeze(-1) * x_week[..., :12].contiguous() +
-            p_w1.unsqueeze(-1) * x_week[..., 12:].contiguous()
-        ).float() 
+            p_w1.unsqueeze(-1) * x_week[..., 12:].contiguous() +
+            p_d1.unsqueeze(-1) * x_day.contiguous()
+        ).float()
 
-        # 3) Expectation of L1-similarity of Weekly Input
-        mask_week_val = p_w2 * week2_l1 + p_w1 * week_l1   # (B, N, 1)
+        expected_pred = (
+            p_w2 * pred_sims[0] +
+            p_w1 * pred_sims[1] +
+            p_d1 * pred_sims[2]
+        ).float()
 
-        # 4-1-1) Masking Matrix of Weekly Input
-        mask_week = torch.sigmoid(self.scale * (self.threshold_week - mask_week_val)).float()
-        mask_week_idx = (mask_week >= 0.5).long().squeeze(-1)
-        mask_week = mask_week.unsqueeze(-1)  # (B, N, 1, 1)
+        expected_unc = (
+            p_w2 * unc_adj[0] +
+            p_w1 * unc_adj[1] +
+            p_d1 * unc_adj[2]
+        ).float()
 
-        # 4-1-2) Mask Weekly Input
-        x_final_week_input = x_week_input * mask_week
+        mask = torch.sigmoid(self.threshold - expected_pred)
+        mask = (mask * expected_unc).unsqueeze(-1).float()
 
-        # 4-2-1) Masking Matrix of Daily Input
-        mask_day = torch.sigmoid(self.scale * (self.threshold_day - day_l1)).float()
-        mask_day_idx = (mask_day >= 0.5).long().squeeze(-1)
-        mask_day = mask_day.unsqueeze(-1) # B, N, 1, 1
+        x_final_his_input = x_his_input * mask
 
-        # 4-2-2) Mask Daily Input
-        x_final_day_input = x_day * mask_day
+        his_adj  = self.adap_adj(
+            torch.cat(pred_sims, dim=-1),
+            torch.cat(uncertainty, dim=-1)
+        ).float()
 
-        # 5) Weighted Adjacency Matrix of Historical and Recent Inputs
-        his = torch.cat([x_week_input, x_day], dim=-1)
-        his_hour = torch.cat([x_hour, x_hour], dim=-1)
-        
-        his_sem_adj = self.sem_adj - torch.eye(self.num_nodes, device=self.sem_adj.device)
-        his_adj = self.softmax(self.weight_adj(his, his_hour, his_sem_adj)).float()
-        hour_adj = self.softmax(self.weight_adj(x_hour, x_hour, self.adj_)).float()
+        hour_adj = self.softmax(
+            self.weight_adj(x_hour, x_hour, self.adj_, self.threshold,
+                            self.scale_input, self.scale_sim)
+        ).float()
 
-        # Embedding
-        embedding_vec = self.embed(mask_week_idx, mask_day_idx)
+        normalized_hour_adj = self.adj_norm(hour_adj).float().unsqueeze(1)
 
-        # Concat Historical Inputs
-        x_final_weekday = torch.cat([x_final_week_input, x_final_day_input], dim=2)
+        final_norm_adj = [his_adj.unsqueeze(1), normalized_hour_adj]
+        x_final        = [x_final_his_input.float(), x_hour.float()]
 
-        # Weighted Normalization
-        normalized_his_adj = batch_symmetric_normalize(his_adj).float().unsqueeze(1) # (B, 1, N, N)
-        normalized_hour_adj = batch_symmetric_normalize(hour_adj).float().unsqueeze(1) # (B, 1, N, N)
-
-        final_norm_adj = [normalized_his_adj, normalized_hour_adj]
-
-        x_final = [x_final_weekday, x_hour]
-        mask_his = [mask_week, mask_day]
-
-        output = self.submodule(x_final, final_norm_adj, mask_his, embedding_vec) # B, N, F, T
+        output = self.submodule(x_final, final_norm_adj, mask)  # B, N, T
 
         final_output = self.W * output
 
-        return final_output
+        return final_output, loss_compute
