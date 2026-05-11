@@ -3,9 +3,8 @@
 ## Required Packages
 ```
 python == 3.10.13
-pytorch == 2.9.1
+pytorch == 2.7.1
 numpy == 2.2.5
-torch-geometric == 2.6.1
 ```
 
 ## Training and Testing Commands
@@ -44,16 +43,18 @@ Traffic and connectivity information for PEMS03, 04, 07 and 08 can be downloaded
 
 Traffic information for PEMS-BAY and METR-LA can be downloaded from [STAEformer](https://github.com/XDZhelheim/STAEformer).
 
+Traffic information for SD can be downloaded from [LargeST](https://github.com/liuxu77/LargeST)
+
 Processed connectivity information for PEMS-BAY and METR-LA is provided in data/.
 
 ### Dataset Statistics
-| Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 | METR-LA | PEMS-BAY|
-|---------|--------|--------|--------|--------|--------|--------|
-| # of nodes | 358 | 307 | 883 | 170 | 207 | 325 |
-| # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 | 34,272 | 52,116 |
-| Granularity | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins |
+| Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 | METR-LA | PEMS-BAY| SD (2019)|
+|---------|--------|--------|--------|--------|--------|--------|--------|
+| # of nodes | 358 | 307 | 883 | 170 | 207 | 325 | 716 |
+| # of timesteps | 26,208 | 16,992 | 28,224 | 17,856 | 34,272 | 52,116 | 35,040 |
+| Granularity | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins | 5 mins |
 | Start time | Sept. 1st 2018 | Jan. 1st 2018 | May 1st 2017 | July 1st 2016 | March 1st 2012 | Jan. 1st 2017 |
 | End time | Nov. 30th 2018 | Feb. 28th 2018 | Aug. 31st 2017 | Aug. 31st 2016 | June 30th 2012 |  May 31st 2017 |
-| Signals | F | F,S,O | F | F,S,O | F,S,O | F,S,O |
+| Signals | F | F,S,O | F | F,S,O | F,S,O | F,S,O | F |
 
 In row titled “Signals”, **F** represents traffic flow, **S** represents traffic speed, and **O** represents traffic occupancy rate.
