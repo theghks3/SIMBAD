@@ -45,8 +45,6 @@ Traffic information for PEMS-BAY and METR-LA can be downloaded from [STAEformer]
 
 Traffic information for SD can be downloaded from [LargeST](https://github.com/liuxu77/LargeST)
 
-Processed connectivity information for PEMS-BAY and METR-LA is provided in data/.
-
 ### Dataset Statistics
 | Dataset | PEMS03 | PEMS04 | PEMS07 | PEMS08 | METR-LA | PEMS-BAY| SD (2019)|
 |---------|--------|--------|--------|--------|--------|--------|--------|
