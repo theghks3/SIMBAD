@@ -1,27 +1,32 @@
 import argparse
-import random
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import configparser
+import ast
 from utils import *
 from model import *
 from data_preparation import *
 from time import time
-from torch.utils.data import TensorDataset, DataLoader
 from metric import *
-from collections import OrderedDict
 
 
-def load_data(args, adj_filename, dataset_sequence):
-    all_data = read_and_generate_dataset(adj_filename, dataset_sequence, args.weeks, args.days, args.hours, args.num_nodes,
-                                        args.seq_len, args.input_dim, args.train_ratio, args.val_ratio, args.points_per_hour, args.node_ratio)
+def load_data(args, dataset_sequence):
+    all_data = read_and_generate_dataset(log, dataset_sequence, args.weeks, args.days, args.hours, args.seq_len, args.input_dim,
+                                        args.train_ratio, args.val_ratio, args.points_per_hour)
 
     train_loader, val_loader, test_loader, stats = get_final_dataset(all_data, args.batch_size)
 
-    return train_loader, val_loader, test_loader, stats, all_data['threshold']['week'], all_data['threshold']['day'], all_data['sem_adj']
+    return train_loader, val_loader, test_loader, stats, all_data['threshold']['sim']
+
+def compute_uncertainty_loss(true_target, pred_target, uncertainty):
+
+    loss = (
+        0.5 * torch.exp(-uncertainty) * (pred_target - true_target) ** 2
+        + 0.5 * uncertainty
+    ).mean()
+
+    return loss
 
 def compute_val_loss(device, model, val_loader, scaler, loss_func, epoch):
     '''
@@ -39,14 +44,12 @@ def compute_val_loss(device, model, val_loader, scaler, loss_func, epoch):
         y_true_list = []
         y_pred_list = []
 
-        for index, (week, day, hour, week2_sim, week_sim, day_sim, target) in enumerate(val_loader):
+        for index, (week, day, hour, sim, target) in enumerate(val_loader):
             week = week.to(device)
             day = day.to(device)
             hour = hour.to(device)
-            week2_sim = week2_sim.to(device)
-            week_sim = week_sim.to(device)
-            day_sim = day_sim.to(device)
-            pred = model([week, day, hour, week2_sim, week_sim, day_sim])
+            sim = sim.to(device)
+            pred, _ = model([week, day, hour, sim])
 
             y_true_list.append(target.to(device).detach().cpu())
             y_pred_list.append(pred.detach().cpu())
@@ -60,12 +63,18 @@ def compute_val_loss(device, model, val_loader, scaler, loss_func, epoch):
 
     return loss
 
-def train(device, args, model, train_loader, val_loader, test_loader, scaler, optimizer, loss_func):
+def train(device, args, model, train_loader, val_loader, scaler, optimizer, loss_func):
     global_step = 0
     best_epoch = 0
     best_val_loss = float('inf')
     early_stop = 0
     start_time = time()
+
+    scheduler = optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=args.patience,
+        gamma=0.1
+    )
     
 
     for epoch in range(args.epochs):
@@ -73,19 +82,20 @@ def train(device, args, model, train_loader, val_loader, test_loader, scaler, op
 
         model.train()
 
-        for index, (week, day, hour, week2_sim, week_sim, day_sim, target) in enumerate(train_loader):
+        for index, (week, day, hour, sim, sim_target, target) in enumerate(train_loader):
             optimizer.zero_grad()
 
             week = week.to(device)
             day = day.to(device)
             hour = hour.to(device)
-            week2_sim = week2_sim.to(device)
-            week_sim = week_sim.to(device)
-            day_sim = day_sim.to(device)
+            sim = sim.to(device)
+            sim_target = sim_target.to(device)
 
-            outputs = model([week, day, hour, week2_sim, week_sim, day_sim])
+            outputs, loss_compute = model([week, day, hour, sim])
+            unc_loss = compute_uncertainty_loss(sim_target, loss_compute[0], loss_compute[1])
             outputs = scaler.inverse_transform(outputs)
-            loss = loss_func(outputs, target.to(device))
+            pred_loss = loss_func(outputs, target.to(device))
+            loss = pred_loss + args.lambda_u * unc_loss
             loss.backward()
             optimizer.step()
             training_loss = loss.item()
@@ -95,6 +105,7 @@ def train(device, args, model, train_loader, val_loader, test_loader, scaler, op
                 log_string(log, f'Global step: {global_step}, Training loss: {training_loss:.2f}, Time: {time() - start_time:.2f}s')
 
         val_loss = compute_val_loss(device, model, val_loader, scaler, loss_func, epoch+1)
+        scheduler.step()
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_epoch = epoch + 1
@@ -121,7 +132,7 @@ def train(device, args, model, train_loader, val_loader, test_loader, scaler, op
 
     log_string(log, f"Training took {end_min} minutes {end_sec} seconds.")
 
-def train_continue(device, args, model, train_loader, val_loader, test_loader, scaler, optimizer, loss_func, epoch_saved, val_loss):
+def train_continue(device, args, model, train_loader, val_loader, scaler, optimizer, loss_func, epoch_saved, val_loss):
     global_step = 0
     best_epoch = 0
     best_val_loss = val_loss
@@ -134,19 +145,20 @@ def train_continue(device, args, model, train_loader, val_loader, test_loader, s
 
         model.train()
 
-        for index, (week, day, hour, week2_sim, week_sim, day_sim, target) in enumerate(train_loader):
+        for index, (week, day, hour, sim, sim_target, target) in enumerate(train_loader):
             optimizer.zero_grad()
 
             week = week.to(device)
             day = day.to(device)
             hour = hour.to(device)
-            week2_sim = week2_sim.to(device)
-            week_sim = week_sim.to(device)
-            day_sim = day_sim.to(device)
+            sim = sim.to(device)
+            sim_target = sim_target.to(device)
 
-            outputs = model([week, day, hour, week2_sim, week_sim, day_sim])
+            outputs, loss_compute = model([week, day, hour, sim])
+            unc_loss = compute_uncertainty_loss(sim_target, loss_compute[0], loss_compute[1])
             outputs = scaler.inverse_transform(outputs)
-            loss = loss_func(outputs, target.to(device))
+            pred_loss = loss_func(outputs, target.to(device))
+            loss = pred_loss + args.lambda_u * unc_loss
             loss.backward()
             optimizer.step()
             training_loss = loss.item()
@@ -187,14 +199,12 @@ def test(device, args, model, test_loader, scaler, loss_func):
     y_true = []
     model.eval()
     with torch.no_grad():
-        for index, (week, day, hour, week2_sim, week_sim, day_sim, target) in enumerate(test_loader):
+        for index, (week, day, hour, sim, target) in enumerate(test_loader):
             week = week.to(device)
             day = day.to(device)
             hour = hour.to(device)
-            week2_sim = week2_sim.to(device)
-            week_sim = week_sim.to(device)
-            day_sim = day_sim.to(device)
-            output = model([week, day, hour, week2_sim, week_sim, day_sim])
+            sim = sim.to(device)
+            output, _ = model([week, day, hour, sim])
             test_t = target.to(device).permute(0,2,1).unsqueeze(-1)
             output = output.permute(0,2,1).unsqueeze(-1)
             y_true.append(test_t)
@@ -218,18 +228,20 @@ def test(device, args, model, test_loader, scaler, loss_func):
 
 
 def main(args, device):
-    
-    dataset_sequence = f"{args.data_dir}/{args.dataset}/{args.dataset}.npz"
-    adj_filename = f"{args.data_dir}/{args.dataset}/{args.dataset}.csv"
 
-    adj = get_adjacency_matrix(adj_filename, args.num_nodes)
+    if args.dataset == "PEMS03" or "PEMS04" or "PEMS07" or "PEMS08":
+        adj = get_adjacency_matrix(args.adj_filename, args.num_nodes)
+    elif args.dataset == "METR-LA" or "PEMS-BAY":
+        adj = get_adjacency_metrbay(args.adj_filename)
+    elif args.dataset == "SD":
+        adj = get_adjacency_sd(args.adj_filename, args.num_nodes)
+    
+    adj = get_adjacency_matrix(args.adj_filename, args.num_nodes)
     adj = torch.from_numpy(adj).unsqueeze(0).to(args.device)
 
-    train_loader, val_loader, test_loader, scaler, threshold_week, threshold_day, sem_adj = load_data(args, adj_filename, dataset_sequence)
+    train_loader, val_loader, test_loader, scaler, threshold = load_data(args, args.dataset_sequence)
 
-    backbone = get_backbones(adj_filename, args.num_nodes, args.input_dim, args.hidden_dim)
-
-    model = SIMBAD(args.device, args.seq_len, backbone, adj, threshold_week, threshold_day, sem_adj, args.num_nodes, args.hidden_dim, args.output_dim, args.scale, args.tau)
+    model = SIMBAD(args.device, args.seq_len, adj, threshold, scaler, args.num_nodes, args.hidden_dim, args.output_dim, args.tau, args.dropout)
     model = model.to(args.device)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr_rate)
@@ -237,29 +249,27 @@ def main(args, device):
     criterion = MaskedMAELoss()
     
     if args.mode == 'train':
-        train(args.device, args, model, train_loader, val_loader, test_loader, scaler, optimizer, criterion)
+        train(args.device, args, model, train_loader, val_loader, scaler['input'], optimizer, criterion)
         checkpoint = torch.load(args.checkpoint, map_location=args.device)
         model.load_state_dict(checkpoint["model_state_dict"])
         log_string(log, 'Model successfully loaded')
-        test(args.device, args, model, test_loader, scaler, criterion)
+        test(args.device, args, model, test_loader, scaler['input'], criterion)
     elif args.mode == 'train_continue':
         checkpoint = torch.load(args.checkpoint, map_location=device)
         epoch_continue = checkpoint["epoch"]
         val_loss = checkpoint['loss']
         model.load_state_dict(checkpoint["model_state_dict"])
         log_string(log, 'Model successfully loaded')
-        train_continue(args.device, args, model, train_loader, val_loader, test_loader, scaler, optimizer, criterion, epoch_continue, val_loss)
+        train_continue(args.device, args, model, train_loader, val_loader, scaler['input'], optimizer, criterion, epoch_continue, val_loss)
         checkpoint = torch.load(args.checkpoint, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
         log_string(log, 'Model successfully loaded')
-        test(args.device, args, model, test_loader, scaler, criterion)
+        test(args.device, args, model, test_loader, scaler['input'], criterion)
     elif args.mode == 'test':
         checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         log_string(log, 'Model successfully loaded')
-        test(args.device, args, model, test_loader, scaler, criterion)
-
-    #train(device, args, model, train_loader, val_loader, test_loader, adj, stats, optimizer, criterion)
+        test(args.device, args, model, test_loader, scaler['input'], criterion)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Pytorch Model')
@@ -277,6 +287,8 @@ if __name__ == '__main__':
     # Data prepare
     parser.add_argument("--data_dir", type=str, help="dataset directory", default=config["file"]["directory"])
     parser.add_argument("--dataset", type=str, help="type of traffic data", default=config["file"]["dataset"])
+    parser.add_argument("--dataset_sequence", type=str, help="dataset sequence file", default=config["file"]["dataset_sequence"])
+    parser.add_argument("--adj_filename", type=str, help="adjacency matrix file", default=config["file"]["adj_filename"])
 
     # Dataset details
     parser.add_argument("--points_per_hour", type=int, help="number of points per hour", default=config["data"]["points_per_hour"])
@@ -290,8 +302,8 @@ if __name__ == '__main__':
     parser.add_argument("--input_dim", type=int, help="number of input dimensions", default=config["model"]["input_dim"])
     parser.add_argument("--hidden_dim", type=int, help="number of hidden dimensions", default=config["model"]["hidden_dim"])
     parser.add_argument("--output_dim", type=int, help="number of output dimensions", default=config["model"]["output_dim"])
-    parser.add_argument("--node_ratio", type=float, help="sparsity level of semantic adjacency matrix", default=config["model"]["node_ratio"])
-    parser.add_argument("--scale", type=float, help="hardness of mask", default=config["model"]["scale"])
+    parser.add_argument("--dropout", type=float, help="dropout level", default=config["model"]["dropout"])
+    parser.add_argument("--lambda_u", type=float, help="control level of uncertainty loss", default=config["model"]["lambda_u"])
     parser.add_argument("--tau", type=float, help="hardness of softmax", default=config["model"]["tau"])
 
     # Training details
@@ -301,12 +313,12 @@ if __name__ == '__main__':
     parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=config["train"]["epochs"])
     parser.add_argument("--lr_rate", type=float, help="learning rate", default=config["train"]["lr_rate"])
     parser.add_argument("--early_stop", type=int, help="maximum number of epochs of no improvement in validation", default=config["train"]["early_stop"])
+    parser.add_argument("--patience", nargs="+", type=int, help="learning weight decay epoch", default=ast.literal_eval(config["train"]["patience"]))
+    parser.add_argument("--decay", type=float, help="learning rate weight decay", default=config["train"]["decay"])
     parser.add_argument("--metric", type=str, help="type of loss for optimization", default=config["train"]["metric"])
     parser.add_argument("--print_every", type=int, help="step of printing training process", default=config["train"]["print_every"])
-
     args = parser.parse_args()
 
     device = torch.device(args.device)
     log = open(args.log, 'w')
-    log_string(log, f'{args.checkpoint}')
     main(args, device)
