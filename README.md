@@ -1,12 +1,5 @@
 # SIMBAD: Spatio-Temporal Traffic Forecasting Robust to Aperiodicity
 
-## Required Packages
-```
-python == 3.10.13
-pytorch == 2.7.1
-numpy == 2.2.5
-```
-
 ## Training and Testing Commands
 Train SIMBAD through the following commands for the 4 PEMS datasets.
 
