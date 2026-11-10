@@ -10,7 +10,7 @@ import torch.optim as optim
 
 from data_preparation import get_final_dataset, read_and_generate_dataset
 from metric import MaskedMAELoss, RMSE_MAE_MAPE
-from SIMBAD_2 import SIMBAD
+from SIMBAD import SIMBAD
 from uncertainty import compute_uncertainty_loss
 from utils import get_adjacency_matrix, log_string
 
