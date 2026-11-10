@@ -1,33 +1,47 @@
-import numpy as np
 import csv
-import pickle
+
+import numpy as np
+import torch
+
+
+def log_string(log, string):
+    log.write(string + '\n')
+    log.flush()
+    print(string)
+
 
 class StandardScaler:
-    """
-    Standard the input
-    https://github.com/nnzhan/Graph-WaveNet/blob/master/util.py
-    """
+    """Standardize NumPy arrays and tensors with shared statistics."""
 
     def __init__(self, mean=None, std=None):
+        if std is not None and np.any(np.asarray(std) == 0):
+            raise ValueError("standard deviation must be non-zero")
         self.mean = mean
         self.std = std
 
     def fit_transform(self, data):
         self.mean = data.mean()
         self.std = data.std()
+        if np.any(np.asarray(self.std) == 0):
+            raise ValueError("standard deviation must be non-zero")
 
         return (data - self.mean) / self.std
 
     def transform(self, data):
-        return (data - self.mean) / self.std
+        mean, std = self._parameters_for(data)
+        return (data - mean) / std
 
     def inverse_transform(self, data):
-        return (data * self.std) + self.mean
+        mean, std = self._parameters_for(data)
+        return (data * std) + mean
 
-def log_string(log, string):
-    log.write(string + '\n')
-    log.flush()
-    print(string)
+    def _parameters_for(self, data):
+        if torch.is_tensor(data):
+            mean = torch.as_tensor(self.mean, dtype=data.dtype, device=data.device)
+            std = torch.as_tensor(self.std, dtype=data.dtype, device=data.device)
+            return mean, std
+        return self.mean, self.std
+
 
 def get_adjacency_matrix(distance_df_filename, num_of_vertices):
     '''
@@ -38,10 +52,23 @@ def get_adjacency_matrix(distance_df_filename, num_of_vertices):
     :return:
     A : unweighted symmetric adjacency matrix (no self-loop)
     '''
-    with open(distance_df_filename, 'r') as f:
+    with open(distance_df_filename, 'r', newline='') as f:
         reader = csv.reader(f)
-        header = f.__next__()
-        edges = [(int(i[0]), int(i[1])) for i in reader]
+        edges = []
+        for row_number, row in enumerate(reader, start=1):
+            if len(row) < 2:
+                raise ValueError(f"invalid adjacency row {row_number}: {row}")
+            try:
+                source, target = int(row[0]), int(row[1])
+            except ValueError:
+                if row_number == 1:
+                    continue
+                raise ValueError(f"invalid adjacency row {row_number}: {row}")
+            if not (0 <= source < num_of_vertices and 0 <= target < num_of_vertices):
+                raise ValueError(
+                    f"node index out of range at adjacency row {row_number}"
+                )
+            edges.append((source, target))
 
     A = np.zeros((int(num_of_vertices), int(num_of_vertices)),
                 dtype=np.float32)
@@ -51,32 +78,3 @@ def get_adjacency_matrix(distance_df_filename, num_of_vertices):
 
     return A
 
-def load_pickle(pickle_file):
-    try:
-        with open(pickle_file, 'rb') as f:
-            pickle_data = pickle.load(f)
-    except UnicodeDecodeError as e:
-        with open(pickle_file, 'rb') as f:
-            pickle_data = pickle.load(f, encoding='latin1')
-    except Exception as e:
-        print('Unable to load data ', pickle_file, ':', e)
-        raise
-    return pickle_data
-
-def get_adjacency_metrbay(pkl_filename):
-    sensor_ids, sensor_id_to_ind, adj_mx = load_pickle(pkl_filename)
-
-    adj = (adj_mx + adj_mx.T) / 2
-    adj = (adj != 0).astype(int)
-
-    return adj
-
-def get_adjacency_sd(npy_filename, num_nodes):
-    adj = np.load(npy_filename)
-    eye = np.eye(num_nodes)
-
-    adj = adj - eye
-    adj = (adj + adj.T) / 2
-    adj = (adj != 0).astype(int)
-
-    return adj
