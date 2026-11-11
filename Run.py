@@ -281,7 +281,6 @@ if __name__ == '__main__':
     parser.add_argument("--mode", choices=("train", "test"), help="execution mode", default="train")
     parser.add_argument("--log", type=str, help="log", default="logging.log")
     parser.add_argument("--checkpoint", type=str, help="checkpoint model", default='model.pth')
-    
     # Data prepare
     parser.add_argument("--data_dir", type=str, help="dataset directory", default=config["file"]["directory"])
     parser.add_argument("--dataset", type=str, help="type of traffic data", default=config["file"]["dataset"])

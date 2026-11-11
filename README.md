@@ -86,7 +86,7 @@ Traffic information for SD can be downloaded from [LargeST](https://github.com/l
 
 ## Data Format
 
-Each dataset should be stored under `data/<DATASET>/` and requires two files:
+Each dataset is stored under `data/<DATASET>/` and requires two files:
 
 ```text
 data/<DATASET>/
